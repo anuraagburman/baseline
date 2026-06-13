@@ -14,13 +14,23 @@ from sqlalchemy.orm import Session
 from baseline.domain.models import (
     DailyMetrics,
     Insight,
+    MacroBreakdown,
+    Meal,
+    NutritionTargets,
+    OnboardingState,
     UserProfile,
+    WorkoutLog,
 )
 from baseline.storage.schema import (
     DailyMetricsRow,
+    MealRow,
+    NutritionTargetRow,
+    OAuthTokenRow,
+    OnboardingStateRow,
     OutcomeRow,
     UserBaselineRow,
     UserRow,
+    WorkoutLogRow,
 )
 
 
@@ -38,6 +48,13 @@ def upsert_user(session: Session, profile: UserProfile) -> None:
     row.goal = profile.goal.value
     row.history_flags = list(profile.history_flags)
     row.delivery_pref = profile.delivery_pref
+    row.profile_extra = {
+        "height_cm": profile.height_cm,
+        "body_measurements": profile.body_measurements,
+        "workouts_per_week": profile.workouts_per_week,
+        "workout_types": list(profile.workout_types),
+        "health_conditions": list(profile.health_conditions),
+    }
     session.flush()
 
 
@@ -45,6 +62,7 @@ def get_user(session: Session, user_id: str) -> UserProfile | None:
     row = session.get(UserRow, user_id)
     if row is None:
         return None
+    extra = row.profile_extra or {}
     return UserProfile(
         user_id=row.user_id,
         name=row.name,
@@ -54,6 +72,11 @@ def get_user(session: Session, user_id: str) -> UserProfile | None:
         goal=row.goal,
         history_flags=list(row.history_flags or []),
         delivery_pref=row.delivery_pref,
+        height_cm=extra.get("height_cm"),
+        body_measurements=extra.get("body_measurements"),
+        workouts_per_week=extra.get("workouts_per_week", 0),
+        workout_types=list(extra.get("workout_types") or []),
+        health_conditions=list(extra.get("health_conditions") or []),
     )
 
 
@@ -162,3 +185,142 @@ def save_baseline(
         )
     )
     session.flush()
+
+
+# --- Meals ---
+
+def save_meal(session: Session, meal: Meal) -> None:
+    """Upsert one meal (idempotent per meal id)."""
+    existing = session.get(MealRow, meal.id)
+    payload = meal.model_dump(mode="json")
+    if existing is None:
+        session.add(
+            MealRow(
+                id=meal.id,
+                user_id=meal.user_id,
+                date=meal.timestamp.date(),
+                payload=payload,
+            )
+        )
+    else:
+        existing.payload = payload
+        existing.date = meal.timestamp.date()
+    session.flush()
+
+
+def get_meals_for_day(session: Session, user_id: str, day: Date) -> list[Meal]:
+    rows = session.scalars(
+        select(MealRow)
+        .where(MealRow.user_id == user_id, MealRow.date == day)
+        .order_by(MealRow.date.asc())
+    ).all()
+    meals = [Meal.model_validate(r.payload) for r in rows]
+    return sorted(meals, key=lambda m: m.timestamp)
+
+
+# --- Nutrition targets ---
+
+def set_nutrition_targets(
+    session: Session, user_id: str, targets: NutritionTargets
+) -> None:
+    """Upsert the user's daily macro targets (one row per user)."""
+    row = session.get(NutritionTargetRow, user_id)
+    if row is None:
+        row = NutritionTargetRow(user_id=user_id)
+        session.add(row)
+    row.kcal = targets.kcal
+    row.protein_g = targets.protein_g
+    row.carbs_g = targets.carbs_g
+    row.fat_g = targets.fat_g
+    session.flush()
+
+
+def get_nutrition_targets(session: Session, user_id: str) -> NutritionTargets | None:
+    row = session.get(NutritionTargetRow, user_id)
+    if row is None:
+        return None
+    return NutritionTargets(
+        kcal=row.kcal, protein_g=row.protein_g, carbs_g=row.carbs_g, fat_g=row.fat_g
+    )
+
+
+# --- Workouts ---
+
+def log_workout(session: Session, workout: WorkoutLog) -> None:
+    session.add(
+        WorkoutLogRow(
+            user_id=workout.user_id,
+            date=workout.date,
+            type=workout.type,
+            duration_min=workout.duration_min,
+            source=workout.source,
+        )
+    )
+    session.flush()
+
+
+def get_workouts_for_week(
+    session: Session, user_id: str, reference: Date
+) -> list[WorkoutLog]:
+    """Workouts in the 7-day window ending at ``reference`` (inclusive)."""
+    from datetime import timedelta
+
+    start = reference - timedelta(days=6)
+    rows = session.scalars(
+        select(WorkoutLogRow)
+        .where(
+            WorkoutLogRow.user_id == user_id,
+            WorkoutLogRow.date >= start,
+            WorkoutLogRow.date <= reference,
+        )
+        .order_by(WorkoutLogRow.date.asc())
+    ).all()
+    return [
+        WorkoutLog(
+            user_id=r.user_id, date=r.date, type=r.type,
+            duration_min=r.duration_min, source=r.source,
+        )
+        for r in rows
+    ]
+
+
+# --- Onboarding state ---
+
+def save_onboarding_state(session: Session, state: OnboardingState) -> None:
+    """Upsert onboarding state (one row per user)."""
+    row = session.get(OnboardingStateRow, state.user_id)
+    if row is None:
+        row = OnboardingStateRow(user_id=state.user_id)
+        session.add(row)
+    row.step = state.step
+    row.data = dict(state.data)
+    row.complete = state.complete
+    session.flush()
+
+
+def get_onboarding_state(session: Session, user_id: str) -> OnboardingState | None:
+    row = session.get(OnboardingStateRow, user_id)
+    if row is None:
+        return None
+    return OnboardingState(
+        user_id=row.user_id, step=row.step, data=dict(row.data or {}),
+        complete=row.complete,
+    )
+
+
+# --- OAuth tokens ---
+
+def save_oauth_tokens(
+    session: Session, user_id: str, provider: str, tokens: dict
+) -> None:
+    row = session.get(OAuthTokenRow, (user_id, provider))
+    if row is None:
+        row = OAuthTokenRow(user_id=user_id, provider=provider)
+        session.add(row)
+    row.tokens = dict(tokens)
+    session.flush()
+
+
+def get_oauth_tokens(session: Session, user_id: str, provider: str) -> dict | None:
+    row = session.get(OAuthTokenRow, (user_id, provider))
+    return dict(row.tokens) if row is not None else None
