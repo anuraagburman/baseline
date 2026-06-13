@@ -1,110 +1,230 @@
 # Baseline Chat
 
-A conversational, prevention-first AI health coach that turns your wearable data
-into one plain-language, evidence-grounded insight a day — and lets you ask it
-"why?" Built for people who *don't* have a premium device coach.
+> **Your personal health coach, right here in chat.**
 
-> **v1 status:** full coaching loop working end-to-end — synthetic data,
-> personal-baseline engine, grounded coach, eval gate, FastAPI + CLI chat.
-> Every heavy integration (Google Health, WhatsApp, real Claude, Postgres,
-> pgvector RAG) sits behind a clean interface, ready to slot in without a rewrite.
+Baseline turns your wearable data into plain-language coaching you can talk to — track your meals with a photo, log workouts, monitor your steps and sleep, and get one grounded, evidence-based insight a day. No app downloads, no form walls, just a conversation.
+
+Built for people who want real guidance from their health data without a premium device subscription.
+
+---
 
 ## What it does
 
-1. **Ingests** wearable metrics (v1: synthetic; later: Google Health OAuth)
-2. **Computes your personal baseline** using a robust median + MAD z-score over a
-   rolling window, flagging sustained trends vs. one-off spikes
-3. **Triages** deviations — monitor / coach / escalate — with a conservative
-   pretest-probability gate that prevents false-alarming low-risk users
-4. **Generates a grounded coaching message** tied to your own deviation numbers
-   ("6 bpm above your usual 58"), your stated goal, and curated evidence
-5. **Lets you have a conversation** — ask "why?", ask follow-up questions — with
-   a sensitivity guard that keeps raw clinical data out of the chat
-6. **Gates every prompt/model change** through a safety / relevance /
-   data-faithfulness eval harness before it reaches users
+| Capability | How it works |
+|---|---|
+| **Daily coaching insight** | Computes your personal baseline (robust z-score over your rolling history), triages deviations (monitor / coach / escalate), and generates a grounded message tied to your own numbers ("6 bpm above your usual 58") |
+| **Log a meal from a photo** | Send a food photo (or a text like "chicken 200g") → macros estimated (kcal / protein / carbs / fat) → daily ledger updated ("95g protein left toward your 140g goal") |
+| **Workout + step tracking** | Tracks days worked out, current streak, steps today and 7-day average — combined from wearable device and manual logs |
+| **Conversational onboarding** | One friendly question at a time — name, age, gender, weight, height, goal, workout habits, health conditions — no form walls |
+| **Ask "why?"** | Every insight is explained, grounded in your own deviation numbers |
+| **Privacy-first** | Raw metrics and clinical detail stay in `/history` (the private data screen) — never in the chat body |
+| **Eval-gated coaching** | Every prompt/model change is scored on safety, relevance, and data-faithfulness before it ships |
+
+---
 
 ## Architecture
 
 ```
-SyntheticHealthSource ─► Ingestion ─► SQLite (SQLAlchemy)
-                                         │
-                              Baseline engine (robust z, EWMA, sustained-vs-spike)
-                                         │
-                                   Triage (monitor/coach/escalate, pretest-gated)
-                                         │
-                              Coach (grounded prompt) ─┬─ Retriever (curated evidence)
-                                         │             └─ LLMClient (MockLLM | Claude)
-                                         │
-                          Conversation manager ─► FastAPI / CLI
-                                         │
-                                Eval harness (safety / relevance / faithfulness)
+SyntheticHealthSource ─► Ingestion ─► SQLite (SQLAlchemy → Postgres-ready)
+                                          │
+                               Baseline engine (robust z, sustained-vs-spike)
+                                          │
+                                    Triage (monitor/coach/escalate, pretest-gated)
+                                          │
+                    ┌─────────────────────┼─────────────────────┐
+                    ▼                     ▼                     ▼
+             Coach (grounded)     Nutrition engine         Activity engine
+           ├─ Retriever           (Mifflin-St Jeor         (streaks, steps,
+           └─ LLMClient           targets + ledger)         workout days)
+                    │
+        Conversational Manager ◄──── Onboarding FSM
+        (router: onboarding /        (11-step, tolerant,
+         food log / workout /         resumable)
+         why? / sensitivity guard)
+                    │
+        ┌───────────┴──────────┐
+        ▼                      ▼
+    FastAPI + CLI         Channel (LocalChannel / Twilio WhatsApp*)
+        │
+    Eval harness (safety / relevance / faithfulness gate)
 ```
 
-**Every external dependency is behind a narrow interface:**
+**Every external dependency sits behind a narrow interface.** Swap implementations by changing an env var — zero code changes.
 
-| Interface | v1 implementation | Production (ready to wire) |
+| Interface | Default (runs offline) | Production (config swap) |
 |---|---|---|
-| `HealthSource` | `SyntheticHealthSource` | `GoogleHealthSource` (OAuth 2.0 + PKCE) |
+| `HealthSource` | `SyntheticHealthSource` | `GoogleHealthSource` (OAuth 2.0 + PKCE)* |
 | `LLMClient` | `MockLLM` (deterministic) | `ClaudeClient` (claude-opus-4-8) |
-| `Retriever` | `SimpleEvidenceRetriever` | `VectorRetriever` (pgvector) |
-| DB | SQLite | Postgres / Supabase (`DB_URL` swap) |
-| Channel | FastAPI + CLI | WhatsApp BSP adapter |
+| `NutritionEstimator` | `MockNutritionEstimator` | `ClaudeNutritionEstimator` (vision) |
+| `Channel` | `LocalChannel` (CLI/tests) | `TwilioWhatsAppChannel`* |
+| `OAuthProvider` | `MockOAuthProvider` | `GoogleOAuthProvider`* |
+| Database | SQLite | Postgres / Supabase (`DB_URL` swap) |
+
+\* Scaffolded and interface-complete; real credentials are a config swap (no code changes).
+
+---
 
 ## Quickstart
 
 ```bash
+git clone https://github.com/anuraagburman/baseline.git
+cd baseline
+
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest                           # 93 tests — should all pass
-python -m baseline.evals.harness # eval gate: safety / relevance / faithfulness
+pytest                            # 153 tests — should all pass
+python -m baseline.evals.harness  # eval gate: safety / relevance / faithfulness
 
-python -m baseline.cli           # terminal chat (no API key needed)
+python -m baseline.cli            # full conversational chat in your terminal
 uvicorn baseline.api.app:create_app --factory --reload  # JSON API on :8000
 ```
 
-No API key needed by default — the coach runs against a deterministic mock LLM.
+No API key required by default — the coach, nutrition estimator, and eval harness all run against deterministic mocks.
 
-**To use real Claude:**
+**To use real Claude** (coaching + food photo estimation):
 
 ```bash
 cp .env.example .env
-# Edit .env: BASELINE_LLM_PROVIDER=claude, ANTHROPIC_API_KEY=sk-ant-...
+# Edit .env:
+# BASELINE_LLM_PROVIDER=claude
+# ANTHROPIC_API_KEY=sk-ant-...
 python -m baseline.cli
 ```
 
-## API endpoints
+---
+
+## Try it out
+
+**Terminal chat (full flow):**
+
+```
+python -m baseline.cli
+```
+
+You'll be asked one friendly question at a time (name → age → goal → …), then immediately get your first insight. From there you can:
+
+- `why?` — grounded explanation of today's coaching
+- `I had chicken and rice` — logs the meal, shows macros + remaining
+- `just worked out for 30 min` — logs the workout, updates your streak
+- `show me my raw data` — redirected to the private `/history` screen (privacy guard)
+
+**API:**
+
+```bash
+# Onboard a user
+curl -X POST http://localhost:8000/onboard \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"u1","name":"Pranav","age":36,"sex":"male","weight_kg":78,"goal":"lose_fat","backfill_days":15}'
+
+# Get today's insight
+curl http://localhost:8000/daily-insight/u1
+
+# Chat
+curl -X POST http://localhost:8000/chat/u1 \
+  -H "Content-Type: application/json" \
+  -d '{"message":"why is my heart rate elevated?"}'
+
+# Raw data (private screen)
+curl http://localhost:8000/history/u1
+```
+
+---
+
+## API reference
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/onboard` | Profile + backfill + first insight |
-| `GET` | `/daily-insight/{uid}` | Today's coaching insight |
-| `POST` | `/chat/{uid}` | Conversation turn |
-| `GET` | `/history/{uid}` | Raw metrics (the private "app-side" view) |
+| `POST` | `/onboard` | Conversational onboarding: persist profile, backfill data, return first insight |
+| `GET` | `/daily-insight/{uid}` | Compute and return today's grounded coaching insight |
+| `POST` | `/chat/{uid}` | Single conversation turn (coaching, food log, workout, "why?") |
+| `GET` | `/history/{uid}` | Full raw metrics — the private, "app-side" view |
+| `POST` | `/webhooks/whatsapp` | Twilio inbound webhook (coming in Loop 8) |
+| `GET` | `/oauth/google/start/{uid}` | Start Google Health OAuth flow (coming in Loop 9) |
 
-## Safety
-
-Baseline never diagnoses. Hard rules baked into the system prompt and verified
-by the eval harness on every change:
-- Claim anything? Ground it in the user's **own** deviation numbers.
-- Suggest an action? It must be **modifiable behaviour** (sleep, movement, etc.).
-- Genuinely worrying pattern? "Worth discussing with a doctor" — never a conclusion.
-- Sensitive raw data stays in `/history`, never in the chat body.
+---
 
 ## Eval harness
 
-```
+```bash
 python -m baseline.evals.harness
 ```
 
-Scores 5 golden cases on three dimensions. Exits non-zero if the safety pass
-rate drops below 95% — the never-ship-below gate from the PRD.
+Runs 5 golden cases (normal day, poor sleep, elevated HR, escalation, low activity) through the coach and scores three dimensions:
 
-## What comes next (interfaces already in place)
+- **Safety** — no diagnosis, no medical claims, no alarming certainty (gate: ≥95%)
+- **Data faithfulness** — every number in the message exists in the grounding context
+- **Relevance** — addresses the user's goal and top deviation
 
-- `GoogleHealthSource` — real OAuth 2.0 + PKCE wearable ingestion
-- `ClaudeClient` — real Anthropic API coaching (`BASELINE_LLM_PROVIDER=claude`)
-- `VectorRetriever` — pgvector RAG over day-summary + evidence embeddings
-- WhatsApp BSP channel adapter (inbound-first, utility templates)
-- Postgres / Supabase with row-level security (`BASELINE_DB_URL` swap)
-- Eval harness wired into CI as a release gate
+Exits non-zero if safety drops below threshold. **Never ship a prompt or model change that fails this gate.**
+
+---
+
+## Safety principles (hard rules)
+
+- **Never diagnoses.** Every claim is grounded in the user's own deviation ("X above your usual Y"), not a clinical conclusion.
+- **Modifiable behaviours only.** Sleep, movement, nutrition, recovery — not medication or clinical instructions.
+- **Gentle escalation path.** "Worth discussing with a doctor at your next check-in" — never "you have X."
+- **Privacy split enforced.** Raw metrics and escalation detail live in `/history`, never in chat messages.
+- **Eval-gated.** The safety dimension is a CI gate — nothing ships below threshold.
+
+---
+
+## Configuration (`.env`)
+
+```bash
+cp .env.example .env
+```
+
+| Variable | Default | Description |
+|---|---|---|
+| `BASELINE_LLM_PROVIDER` | `mock` | `mock` or `claude` |
+| `ANTHROPIC_API_KEY` | — | Required when provider is `claude` |
+| `BASELINE_CLAUDE_MODEL` | `claude-opus-4-8` | Model for coaching + vision |
+| `BASELINE_DB_URL` | `sqlite:///baseline.db` | Any SQLAlchemy URL |
+| `BASELINE_WINDOW_DAYS` | `28` | Rolling baseline window (28–60) |
+| `BASELINE_MIN_HISTORY_DAYS` | `14` | Below this → cold-start mode |
+| `BASELINE_BACKFILL_DAYS` | `45` | Days of data generated at onboarding |
+
+---
+
+## Project structure
+
+```
+src/baseline/
+  analytics/          baseline_engine, nutrition, activity
+  coach/              LLMClient + MockLLM + ClaudeClient, prompt, retriever
+  channels/           Channel interface, LocalChannel, TwilioWhatsApp (wip)
+  conversation/       ConversationManager (router + sensitivity guard)
+  domain/models.py    All domain types — the shared vocabulary
+  evals/              Harness + scorers + golden cases
+  ingestion/          Source → DB pipeline
+  nutrition/          NutritionEstimator + MockNutritionEstimator + ClaudeVision
+  onboarding/         FSM (conversational Q&A) + flow (backfill + first insight)
+  sources/            HealthSource protocol + Synthetic + Google scaffold
+  storage/            SQLAlchemy schema + DB factory + repository
+  triage/             Routing engine + pretest-probability gate
+  api/app.py          FastAPI endpoints
+  cli.py              Interactive terminal chat
+```
+
+---
+
+## Roadmap
+
+- [x] Personal-baseline engine (robust z-score, sustained-vs-spike, cold-start norms)
+- [x] Triage with conservative pretest-probability escalation gate
+- [x] Grounded coach (deviation framing, refuse-to-diagnose, eval-gated)
+- [x] Conversational onboarding FSM (one question at a time)
+- [x] Food photo → macro logging + daily ledger
+- [x] Workout + step + streak tracking
+- [x] FastAPI + CLI
+- [ ] Message router (food / workout / coaching / sensitivity dispatch)
+- [ ] Twilio WhatsApp channel adapter + webhook
+- [ ] Google Health OAuth + QR connect flow
+- [ ] Eval harness extended for nutrition-safety golden cases
+- [ ] PR `dev → main` with full e2e verification
+
+---
+
+*Built with Claude. Not medical advice.*
