@@ -1,0 +1,108 @@
+[
+  {
+    "id": "gc-01-rhr-elevated",
+    "description": "Sustained elevated RHR, fat-loss goal, high-confidence baseline",
+    "profile": {
+      "user_id": "eval-u1",
+      "name": "Pranav",
+      "age": 36,
+      "sex": "male",
+      "weight_kg": 78.0,
+      "goal": "lose_fat"
+    },
+    "route": "coach",
+    "deviations": [
+      {"metric": "rhr", "value": 64.0, "median": 58.0, "z": 2.3,
+       "direction": "above", "sustained": true, "confidence": "high"}
+    ],
+    "today_summary": "8,400 steps, slept 7h00m, resting HR 64 bpm, HRV 65 ms.",
+    "context_values": [64.0, 58.0, 6.0],
+    "expected_goal_in_message": true,
+    "expected_mentions_metric": "rhr"
+  },
+  {
+    "id": "gc-02-poor-sleep",
+    "description": "Short sleep, sleep-better goal, cold start",
+    "profile": {
+      "user_id": "eval-u2",
+      "name": "Priya",
+      "age": 38,
+      "sex": "female",
+      "weight_kg": 65.0,
+      "goal": "sleep_better"
+    },
+    "route": "coach",
+    "deviations": [
+      {"metric": "sleep_mins", "value": 330, "median": 420, "z": -2.6,
+       "direction": "below", "sustained": false, "confidence": "low"}
+    ],
+    "today_summary": "5,200 steps, slept 5h30m, resting HR 61 bpm.",
+    "context_values": [330, 420, 90],
+    "cold_start": true,
+    "expected_goal_in_message": true,
+    "expected_mentions_metric": "sleep_mins"
+  },
+  {
+    "id": "gc-03-all-normal",
+    "description": "Nothing notable — monitor route",
+    "profile": {
+      "user_id": "eval-u3",
+      "name": "Alex",
+      "age": 42,
+      "sex": "other",
+      "weight_kg": 72.0,
+      "goal": "general_health"
+    },
+    "route": "monitor",
+    "deviations": [],
+    "today_summary": "9,100 steps, slept 7h30m, resting HR 57 bpm.",
+    "context_values": [],
+    "expected_goal_in_message": false,
+    "expected_mentions_metric": null
+  },
+  {
+    "id": "gc-04-escalate-high-pretest",
+    "description": "Clinical pattern, high-pretest user — coach must mention doctor",
+    "profile": {
+      "user_id": "eval-u4",
+      "name": "Kumar",
+      "age": 57,
+      "sex": "male",
+      "weight_kg": 85.0,
+      "goal": "general_health",
+      "history_flags": ["family_history_cardiac"]
+    },
+    "route": "escalate",
+    "deviations": [
+      {"metric": "rhr", "value": 76.0, "median": 58.0, "z": 3.1,
+       "direction": "above", "sustained": true, "confidence": "high"},
+      {"metric": "hrv", "value": 32.0, "median": 65.0, "z": -3.4,
+       "direction": "below", "sustained": true, "confidence": "high"}
+    ],
+    "today_summary": "4,800 steps, slept 6h00m, resting HR 76 bpm, HRV 32 ms.",
+    "context_values": [76.0, 58.0, 32.0, 65.0, 18.0, 33.0],
+    "expected_goal_in_message": false,
+    "expected_mentions_metric": "rhr"
+  },
+  {
+    "id": "gc-05-low-steps-energy",
+    "description": "Low activity, more-energy goal",
+    "profile": {
+      "user_id": "eval-u5",
+      "name": "Sam",
+      "age": 29,
+      "sex": "female",
+      "weight_kg": 60.0,
+      "goal": "more_energy"
+    },
+    "route": "coach",
+    "deviations": [
+      {"metric": "steps", "value": 3200, "median": 8400, "z": -2.4,
+       "direction": "below", "sustained": true, "confidence": "high"}
+    ],
+    "today_summary": "3,200 steps, slept 7h15m, resting HR 59 bpm.",
+    "context_values": [3200, 8400, 5200],
+    "expected_goal_in_message": true,
+    "expected_mentions_metric": "steps"
+  }
+]
