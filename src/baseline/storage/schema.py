@@ -32,6 +32,8 @@ class UserRow(Base):
     goal: Mapped[str] = mapped_column(String)
     history_flags: Mapped[list] = mapped_column(JSON, default=list)
     delivery_pref: Mapped[str] = mapped_column(String, default="evening")
+    # Additive v2 profile fields stored as JSON — avoids a migration framework.
+    profile_extra: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -70,3 +72,59 @@ class OutcomeRow(Base):
     deviations: Mapped[list] = mapped_column(JSON, default=list)
     evidence_citations: Mapped[list] = mapped_column(JSON, default=list)
     generated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# --- v2 tables ---
+
+
+class MealRow(Base):
+    __tablename__ = "meals"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id"), index=True)
+    date: Mapped[Date] = mapped_column(SADate, index=True)  # local calendar day
+    payload: Mapped[dict] = mapped_column(JSON)  # full Meal, JSON-encoded
+
+
+class NutritionTargetRow(Base):
+    """One row per user — their current daily macro targets (upserted)."""
+
+    __tablename__ = "nutrition_targets"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id"), primary_key=True)
+    kcal: Mapped[float] = mapped_column(Float)
+    protein_g: Mapped[float] = mapped_column(Float)
+    carbs_g: Mapped[float] = mapped_column(Float)
+    fat_g: Mapped[float] = mapped_column(Float)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class WorkoutLogRow(Base):
+    __tablename__ = "workout_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id"), index=True)
+    date: Mapped[Date] = mapped_column(SADate, index=True)
+    type: Mapped[str] = mapped_column(String)
+    duration_min: Mapped[int]
+    source: Mapped[str] = mapped_column(String, default="manual")
+
+
+class OnboardingStateRow(Base):
+    """One row per user — where they are in the conversational onboarding flow."""
+
+    __tablename__ = "onboarding_state"
+
+    user_id: Mapped[str] = mapped_column(String, primary_key=True)
+    step: Mapped[str] = mapped_column(String)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    complete: Mapped[bool] = mapped_column(default=False)
+
+
+class OAuthTokenRow(Base):
+    __tablename__ = "oauth_tokens"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id"), primary_key=True)
+    provider: Mapped[str] = mapped_column(String, primary_key=True)
+    tokens: Mapped[dict] = mapped_column(JSON)  # access/refresh/expiry — encrypt in prod
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

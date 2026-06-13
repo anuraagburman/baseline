@@ -141,7 +141,13 @@ class Deviation(BaseModel):
 
 
 class UserProfile(BaseModel):
-    """Who the user is — drives goal emphasis and the pretest-probability gate."""
+    """Who the user is — drives goal emphasis, target derivation, and the
+    pretest-probability gate.
+
+    The v2 fields (height, measurements, training habits, conditions) feed the
+    nutrition/activity engines and the safety logic; all are optional so a
+    partially-onboarded user is still a valid profile.
+    """
 
     user_id: str
     name: str | None = None
@@ -151,6 +157,99 @@ class UserProfile(BaseModel):
     goal: Goal
     history_flags: list[str] = Field(default_factory=list)
     delivery_pref: Literal["morning", "evening", "both"] = "evening"
+    # --- v2 ---
+    height_cm: float | None = None
+    body_measurements: dict[str, float] | None = None  # waist_cm, hip_cm, chest_cm
+    workouts_per_week: int = 0
+    workout_types: list[str] = Field(default_factory=list)
+    health_conditions: list[str] = Field(default_factory=list)
+
+
+class MacroBreakdown(BaseModel):
+    """Macronutrient content — of a meal, a day's intake, or what's remaining."""
+
+    kcal: float
+    protein_g: float
+    carbs_g: float
+    fat_g: float
+
+    def __add__(self, other: "MacroBreakdown") -> "MacroBreakdown":
+        return MacroBreakdown(
+            kcal=self.kcal + other.kcal,
+            protein_g=self.protein_g + other.protein_g,
+            carbs_g=self.carbs_g + other.carbs_g,
+            fat_g=self.fat_g + other.fat_g,
+        )
+
+    @classmethod
+    def zero(cls) -> "MacroBreakdown":
+        return cls(kcal=0, protein_g=0, carbs_g=0, fat_g=0)
+
+
+class Meal(BaseModel):
+    """A logged meal and its estimated macros, from a photo or a text description."""
+
+    id: str
+    user_id: str
+    timestamp: datetime
+    description: str
+    source: Literal["photo", "text"]
+    macros: MacroBreakdown
+    confidence: float = 0.5  # estimator's confidence, 0..1
+
+
+class NutritionTargets(BaseModel):
+    """A user's daily macro targets (derived from profile, user-adjustable)."""
+
+    kcal: float
+    protein_g: float
+    carbs_g: float
+    fat_g: float
+
+
+class DailyNutritionLedger(BaseModel):
+    """Targets vs. what's been consumed today, and what's left to hit them."""
+
+    targets: NutritionTargets
+    consumed: MacroBreakdown
+
+    def remaining(self) -> MacroBreakdown:
+        """What's left toward target (negative when the user is over)."""
+        return MacroBreakdown(
+            kcal=self.targets.kcal - self.consumed.kcal,
+            protein_g=self.targets.protein_g - self.consumed.protein_g,
+            carbs_g=self.targets.carbs_g - self.consumed.carbs_g,
+            fat_g=self.targets.fat_g - self.consumed.fat_g,
+        )
+
+
+class WorkoutLog(BaseModel):
+    """A workout the user did — logged manually or detected from the device."""
+
+    user_id: str
+    date: Date
+    type: str  # running, strength, yoga, cycling, ...
+    duration_min: int
+    source: Literal["manual", "device"] = "manual"
+
+
+class ActivitySummary(BaseModel):
+    """Computed view of recent activity — drives streaks and movement coaching."""
+
+    days_worked_out_this_week: int
+    current_streak: int
+    steps_today: int
+    steps_7d_avg: float
+    active_minutes: int
+
+
+class OnboardingState(BaseModel):
+    """Where a user is in the conversational onboarding flow, plus answers so far."""
+
+    user_id: str
+    step: str
+    data: dict = Field(default_factory=dict)
+    complete: bool = False
 
 
 class EvidenceSnippet(BaseModel):
