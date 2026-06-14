@@ -104,16 +104,86 @@ def _load_deviations(data: list[dict]) -> list[Deviation]:
 
 
 def run_harness(cases_path: Path = GOLDEN_CASES_PATH) -> HarnessReport:
+    import datetime
+
+    from baseline.domain.models import MacroBreakdown, Meal, NutritionTargets, DailyNutritionLedger
+    from baseline.evals.scorers import NutritionSafetyScorer, OnboardingToneScorer
+    from baseline.onboarding.conversation import OnboardingFSM
+
     coach = Coach(llm=MockLLM(), retriever=SimpleEvidenceRetriever())
     safety_scorer = SafetyScorer()
     relevance_scorer = RelevanceScorer()
     faithfulness_scorer = DataFaithfulnessScorer()
+    nutrition_safety_scorer = NutritionSafetyScorer()
+    onboarding_tone_scorer = OnboardingToneScorer()
 
     cases = json.loads(cases_path.read_text())
     report = HarnessReport()
+    today = datetime.date.today()
 
     for case in cases:
-        profile = _load_profile(case["profile"])
+        case_type = case.get("type", "coaching")
+
+        # --- Onboarding tone ---
+        if case_type == "onboarding_tone":
+            fsm_reply = OnboardingFSM().start("eval-tone")
+            message = fsm_reply.reply
+            tone_result = onboarding_tone_scorer.score(message, context={})
+            safety_result = safety_scorer.score(message, context={})
+            report.results.append(CaseResult(
+                id=case["id"], message=message,
+                safety=safety_result.passed and tone_result.passed,
+                relevance=True, faithfulness=True,
+                safety_reason=safety_result.reason or (
+                    "" if tone_result.passed else tone_result.reason),
+                faithfulness_reason="",
+            ))
+            continue
+
+        profile_data = case.get("profile", {})
+        if not profile_data:
+            continue
+        profile = _load_profile(profile_data)
+
+        # --- Nutrition reply cases ---
+        if case_type in ("nutrition", "nutrition_safety"):
+            raw_meal = case["meal"]
+            pre = case.get("pre_consumed", {"protein_g": 0, "carbs_g": 0, "fat_g": 0, "kcal": 0})
+            meal = Meal(
+                id="eval-m",
+                user_id=profile.user_id,
+                timestamp=datetime.datetime.now(),
+                description="test meal",
+                source="text",
+                macros=MacroBreakdown(**raw_meal),
+            )
+            raw_targets = case["targets"]
+            targets = NutritionTargets(**raw_targets)
+            total_consumed = MacroBreakdown(
+                kcal=pre["kcal"] + raw_meal["kcal"],
+                protein_g=pre["protein_g"] + raw_meal["protein_g"],
+                carbs_g=pre["carbs_g"] + raw_meal["carbs_g"],
+                fat_g=pre["fat_g"] + raw_meal["fat_g"],
+            )
+            ledger = DailyNutritionLedger(targets=targets, consumed=total_consumed)
+            message = coach.nutrition_reply(profile, meal, ledger)
+
+            safety_result = safety_scorer.score(message, context={})
+            nutrition_safety_result = nutrition_safety_scorer.score(message, context={})
+            faithfulness_result = faithfulness_scorer.score(
+                message, context={"values": case.get("context_values", [])}
+            )
+            combined_safety = safety_result.passed and nutrition_safety_result.passed
+            report.results.append(CaseResult(
+                id=case["id"], message=message,
+                safety=combined_safety, relevance=True,
+                faithfulness=faithfulness_result.passed,
+                safety_reason=safety_result.reason or nutrition_safety_result.reason,
+                faithfulness_reason=faithfulness_result.reason,
+            ))
+            continue
+
+        # --- Standard coaching cases ---
         deviations = _load_deviations(case.get("deviations", []))
         route = TriageRoute(case["route"])
         today_summary = case.get("today_summary", "")
@@ -121,9 +191,7 @@ def run_harness(cases_path: Path = GOLDEN_CASES_PATH) -> HarnessReport:
 
         insight = coach.generate_insight(
             profile, route, deviations,
-            today_summary=today_summary,
-            date=__import__("datetime").date.today(),
-            cold_start=cold_start,
+            today_summary=today_summary, date=today, cold_start=cold_start,
         )
         message = insight.message
 
@@ -136,18 +204,13 @@ def run_harness(cases_path: Path = GOLDEN_CASES_PATH) -> HarnessReport:
             "top_metric": deviations[0].metric if deviations else "",
         }
         relevance_result = relevance_scorer.score(message, context=relevance_context)
-
-        report.results.append(
-            CaseResult(
-                id=case["id"],
-                message=message,
-                safety=safety_result.passed,
-                relevance=relevance_result.passed,
-                faithfulness=faithfulness_result.passed,
-                safety_reason=safety_result.reason,
-                faithfulness_reason=faithfulness_result.reason,
-            )
-        )
+        report.results.append(CaseResult(
+            id=case["id"], message=message,
+            safety=safety_result.passed, relevance=relevance_result.passed,
+            faithfulness=faithfulness_result.passed,
+            safety_reason=safety_result.reason,
+            faithfulness_reason=faithfulness_result.reason,
+        ))
     return report
 
 

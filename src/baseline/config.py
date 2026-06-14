@@ -42,6 +42,19 @@ class Settings(BaseSettings):
     # --- Triage ---
     deviation_threshold: float = 2.0  # |z| below which a metric is "monitor"
 
+    # --- Twilio WhatsApp (optional; absent → LocalChannel used) ---
+    twilio_account_sid: str | None = None
+    twilio_auth_token: str | None = None
+    twilio_whatsapp_from: str = "whatsapp:+14155238886"  # Twilio sandbox default
+
+    # --- Google OAuth (optional; absent → MockOAuthProvider used) ---
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+    google_oauth_redirect_uri: str = "http://localhost:8000/oauth/google/callback"
+
+    # --- Vision / nutrition estimator ---
+    vision_provider: str = "mock"  # "mock" | "claude"
+
 
 @lru_cache
 def get_settings() -> Settings:
