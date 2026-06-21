@@ -163,6 +163,11 @@ uvicorn baseline.api.app:create_app --factory --reload
 
 ## Going to production
 
+> **Want the step-by-step "deploy once, share a QR" runbook?** See **[DEPLOY.md](DEPLOY.md)** —
+> it walks you through Railway + Twilio WhatsApp + Google Health + the daily-nudge cron, then
+> publishing the **[landing page](landing/)** whose QR code drops anyone straight into the
+> WhatsApp coach. **End users never touch a key** — the secrets below are the operator's, set once.
+
 Production is **entirely config-driven**. No code changes required — every external dependency is behind an interface that you swap by setting an environment variable.
 
 ### Step 1 — Copy and fill in `.env`

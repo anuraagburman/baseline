@@ -174,6 +174,27 @@ def _parse_connect(text: str) -> str:
     return text.strip().lower()
 
 
+_YES = {"yes", "y", "ok", "okay", "sure", "yep", "yeah", "please", "go", "go ahead"}
+_NO = {"no", "n", "nope", "not now", "later", "skip"}
+
+
+def _parse_optin(text: str) -> bool:
+    t = text.strip().lower().strip(".!")
+    if t in _YES:
+        return True
+    if t in _NO:
+        return False
+    # Default to consent only on an affirmative; otherwise re-ask gently.
+    if any(w in t for w in _YES):
+        return True
+    if any(w in t for w in _NO):
+        return False
+    raise ParseError(
+        "Just reply 'yes' to get a daily check-in, or 'no' if you'd rather pull "
+        "it yourself whenever you like."
+    )
+
+
 _STEPS: list[Step] = [
     Step("name", "First up — what's your name?", _parse_name),
     Step("age", "Nice to meet you! How old are you?", _parse_age),
@@ -197,6 +218,10 @@ _STEPS: list[Step] = [
          "Perfect 🙌 Connect your Google Health device so I can read your steps, "
          "sleep and heart rate (read-only). Reply 'connect' when you're ready.",
          _parse_connect),
+    Step("opted_in",
+         "One last thing — is it OK if I send you one short check-in a day? "
+         "(Reply 'yes', or 'no' to pull it yourself anytime. You can stop whenever.)",
+         _parse_optin),
 ]
 
 _WELCOME = (
@@ -265,6 +290,7 @@ class OnboardingFSM:
             "workout_types": data.get("workout_types", []),
             "health_conditions": data.get("health_conditions", []),
             "goal": data.get("goal"),
+            "opted_in": bool(data.get("opted_in", False)),
         }
 
 

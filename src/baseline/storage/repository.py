@@ -54,6 +54,7 @@ def upsert_user(session: Session, profile: UserProfile) -> None:
         "workouts_per_week": profile.workouts_per_week,
         "workout_types": list(profile.workout_types),
         "health_conditions": list(profile.health_conditions),
+        "opted_in": profile.opted_in,
     }
     session.flush()
 
@@ -77,7 +78,22 @@ def get_user(session: Session, user_id: str) -> UserProfile | None:
         workouts_per_week=extra.get("workouts_per_week", 0),
         workout_types=list(extra.get("workout_types") or []),
         health_conditions=list(extra.get("health_conditions") or []),
+        opted_in=extra.get("opted_in", False),
     )
+
+
+def list_opted_in_users(session: Session, window: str | None = None) -> list[UserProfile]:
+    """Return users who consented to proactive daily messages.
+
+    ``window`` ("morning" | "evening") filters by ``delivery_pref``; a user with
+    ``delivery_pref="both"`` matches every window. ``None`` returns all opted-in users.
+    """
+    rows = session.query(UserRow).all()
+    users = [get_user(session, r.user_id) for r in rows]
+    opted = [u for u in users if u is not None and u.opted_in]
+    if window is None:
+        return opted
+    return [u for u in opted if u.delivery_pref == window or u.delivery_pref == "both"]
 
 
 # --- Daily metrics ---
