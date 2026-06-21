@@ -1,0 +1,9 @@
+# Deploy this folder as a static site on Netlify.
+#   1. New site → import this repo → set base directory to `landing`
+#   2. Or drag-and-drop the `landing` folder into the Netlify dashboard.
+# (For Vercel: import the repo and set the Root Directory to `landing`,
+#  framework preset "Other" — it's plain static HTML, no build step.)
+
+[build]
+  publish = "."
+  command = ""
