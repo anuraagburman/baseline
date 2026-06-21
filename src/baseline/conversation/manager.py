@@ -137,12 +137,16 @@ class ConversationManager:
         estimator=None,
         onboarding_fsm=None,
         source=None,
+        oauth_provider=None,
+        public_base_url: str = "http://localhost:8000",
     ) -> None:
         self._coach = coach or Coach()
         self._db = db
         self._estimator = estimator
         self._fsm = onboarding_fsm
         self._source = source
+        self._oauth = oauth_provider
+        self._public_base_url = public_base_url.rstrip("/")
         self._sessions: dict[str, _UserSession] = {}
 
     def set_last_insight(self, user_id: str, insight: Insight, today_summary: str) -> None:
@@ -219,10 +223,11 @@ class ConversationManager:
                 today_summary=sess.today_summary, question=msg,
             )
 
-        # 7) Greeting / no prior insight — orientation
-        if any(g in msg_lower for g in ["hello", "hi ", "hey", "help", "what can you"]) \
-                or msg_lower.strip() in {"hi", "hello", "hey", "help"}:
-            return _FALLBACK_REPLY if sess.last_insight is None else _NO_INSIGHT_REPLY
+        # 7) Greeting / help → capability menu (so the user always knows what to do)
+        if (stripped in {"hi", "hello", "hey", "help", "menu", "start over", "?"}
+                or "what can you" in msg_lower or "how does this work" in msg_lower
+                or msg_lower.startswith("help")):
+            return _FALLBACK_REPLY
 
         # 8) Genuine free-form question → coach brain (always returns a grounded reply)
         if msg.strip():
@@ -258,6 +263,14 @@ class ConversationManager:
 
         if result.complete and result.assembled and self._source:
             self._finalize_onboarding(inbound.user_id, result.assembled, profile, sess)
+
+        # At the connect step, append a real, tappable Google OAuth link (no key,
+        # no password — just a login + consent). Falls back to synthetic data until
+        # real Google credentials are configured.
+        if (not result.complete and result.state.step == "connect" and self._oauth):
+            redirect_uri = f"{self._public_base_url}/oauth/google/callback"
+            url = self._oauth.authorization_url(inbound.user_id, redirect_uri)
+            return f"{result.reply}\n\n👉 {url}"
 
         return result.reply
 

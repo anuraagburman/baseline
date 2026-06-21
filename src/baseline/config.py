@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     # --- Vision / nutrition estimator ---
     vision_provider: str = "mock"  # "mock" | "claude"
 
+    # --- Proactive daily nudge (operator-only cron endpoint) ---
+    cron_secret: str | None = None  # required header to trigger /cron/daily-nudge
+    public_base_url: str = "http://localhost:8000"  # for OAuth redirect + links
+    whatsapp_template_name: str = "baseline_daily_checkin"  # approved Twilio template
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from baseline.analytics.activity import summarize_activity
@@ -61,6 +61,9 @@ def build_app(
     twilio_whatsapp_from: str = "whatsapp:+14155238886",
     google_client_id: str | None = None,
     google_client_secret: str | None = None,
+    cron_secret: str | None = None,
+    whatsapp_template_name: str = "baseline_daily_checkin",
+    public_base_url: str = "http://localhost:8000",
 ) -> FastAPI:
     db = Database(db_url)
     db.create_all()
@@ -88,9 +91,15 @@ def build_app(
 
     manager = ConversationManager(
         coach=coach, db=db, estimator=estimator, onboarding_fsm=fsm, source=source,
+        oauth_provider=oauth_provider, public_base_url=public_base_url,
     )
 
     app = FastAPI(title="Baseline Chat")
+    # Expose singletons for tests + operational introspection.
+    app.state.db = db
+    app.state.channel = channel
+    app.state.coach = coach
+    app.state.manager = manager
 
     # --- Mount sub-routers ---
     from baseline.api.webhooks import make_webhook_router
@@ -98,6 +107,37 @@ def build_app(
 
     app.include_router(make_webhook_router(manager, channel, db))
     app.include_router(make_oauth_router(oauth_provider, db, channel, twilio_whatsapp_from))
+
+    # ---- Health check ----
+
+    @app.get("/healthz")
+    async def healthz():
+        return {"status": "ok"}
+
+    # ---- Proactive daily nudge (operator cron only) ----
+
+    @app.post("/cron/daily-nudge")
+    async def daily_nudge(window: str | None = None,
+                          x_cron_secret: str | None = Header(default=None)):
+        if not cron_secret or x_cron_secret != cron_secret:
+            raise HTTPException(status_code=403, detail="Forbidden.")
+        with db.session() as s:
+            recipients = repo.list_opted_in_users(s, window=window)
+        sent = 0
+        for user in recipients:
+            insight = compute_daily_insight(db, coach, user.user_id)
+            if insight is None:
+                continue
+            # Cost-smart: send the short hook; the reply opens the free 24h window
+            # where the full insight is delivered via the inbound path.
+            hook = (
+                "Your Baseline check-in for today is ready 👋 "
+                "Reply to see today's tip."
+            )
+            manager.set_last_insight(user.user_id, insight, today_summary=insight.message)
+            channel.send_text(user.user_id, hook)
+            sent += 1
+        return {"sent": sent, "window": window}
 
     # ---- Onboarding ----
 
@@ -285,4 +325,7 @@ def create_app() -> FastAPI:
         twilio_whatsapp_from=s.twilio_whatsapp_from,
         google_client_id=s.google_client_id,
         google_client_secret=s.google_client_secret,
+        cron_secret=s.cron_secret,
+        whatsapp_template_name=s.whatsapp_template_name,
+        public_base_url=s.public_base_url,
     )
