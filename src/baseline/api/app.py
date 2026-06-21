@@ -41,6 +41,7 @@ from baseline.domain.models import Goal, Sex, UserProfile, WorkoutLog
 from baseline.nutrition.estimator import MockNutritionEstimator, build_nutrition_estimator
 from baseline.onboarding.conversation import OnboardingFSM
 from baseline.onboarding.flow import OnboardingRequest, onboard_user
+from baseline.services.insights import compute_daily_insight
 from baseline.sources.oauth import MockOAuthProvider, build_oauth_provider
 from baseline.sources.synthetic import SyntheticHealthSource
 from baseline.storage import repository as repo
@@ -142,22 +143,10 @@ def build_app(
             profile = repo.get_user(s, user_id)
         if profile is None:
             raise HTTPException(status_code=404, detail="User not found.")
-        with db.session() as s:
-            recent = repo.get_recent_metrics(s, user_id, 60)
-        if not recent:
+        insight = compute_daily_insight(db, coach, user_id)
+        if insight is None:
             raise HTTPException(status_code=404, detail="No data found.")
-        series = sorted(recent, key=lambda m: m.date)
-        deviations = compute_deviations(series, profile=profile, config=BaselineConfig())
-        cold_start = len(series) < BaselineConfig().min_history_days
-        triage_out = triage(deviations, profile=profile, config=TriageConfig())
-        today_summary = series[-1].summary()
-        insight = coach.generate_insight(
-            profile, triage_out.route, triage_out.deviations,
-            today_summary=today_summary, date=date.today(), cold_start=cold_start,
-        )
-        with db.session() as s:
-            repo.save_insight(s, insight)
-        manager.set_last_insight(user_id, insight, today_summary=today_summary)
+        manager.set_last_insight(user_id, insight, today_summary=insight.message)
         return DailyInsightResponse(
             user_id=insight.user_id, date=insight.date, message=insight.message,
             route=insight.route.value, evidence_citations=insight.evidence_citations,

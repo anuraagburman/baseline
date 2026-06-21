@@ -163,6 +163,9 @@ class UserProfile(BaseModel):
     workouts_per_week: int = 0
     workout_types: list[str] = Field(default_factory=list)
     health_conditions: list[str] = Field(default_factory=list)
+    # Explicit consent for proactive (business-initiated) daily messages.
+    # WhatsApp requires recorded opt-in before we can message a user first.
+    opted_in: bool = False
 
 
 class MacroBreakdown(BaseModel):

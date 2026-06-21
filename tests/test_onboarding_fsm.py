@@ -30,6 +30,7 @@ _HAPPY = [
     "none",              # health conditions
     "I want to lose fat",# goal
     "connected",         # connect device
+    "yes",               # opt-in to daily messages
 ]
 
 
@@ -54,6 +55,14 @@ def test_happy_path_completes_with_assembled_profile():
     assert "strength" in data["workout_types"]
     assert data["health_conditions"] == []
     assert data["goal"] == "lose_fat"
+    assert data["opted_in"] is True
+
+
+def test_optin_no_records_consent_false():
+    answers = _HAPPY[:-1] + ["no"]
+    result, _ = _run(answers)
+    assert result.complete is True
+    assert result.assembled["opted_in"] is False
 
 
 def test_invalid_age_reasks_without_advancing():

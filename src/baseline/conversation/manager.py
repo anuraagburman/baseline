@@ -55,6 +55,24 @@ _NO_INSIGHT_REPLY = (
     "to analyse your recent data."
 )
 
+# ----- Opt-out / opt-in (WhatsApp STOP/START convention) -----
+_STOP_TRIGGERS = {"stop", "pause", "unsubscribe", "cancel", "quit", "end"}
+_START_TRIGGERS = {"start", "resume", "subscribe"}
+_STOP_REPLY = (
+    "Got it — I've paused your daily messages. You won't hear from me unless you "
+    "message first. Say \"start\" anytime to turn them back on. 👋"
+)
+_START_REPLY = (
+    "You're back on — I'll send your daily check-in again. 👋"
+)
+
+# Friendly catch-all so no message ever dead-ends in silence.
+_FALLBACK_REPLY = (
+    "I'm your health coach 👋 You can: send a photo of a meal (or describe it) to "
+    "log calories and protein, tell me about a workout, or ask \"why?\" about today's "
+    "tip. What would you like to do?"
+)
+
 
 def _is_intent(msg_lower: str, triggers: set[str]) -> bool:
     return any(t in msg_lower for t in triggers)
@@ -164,6 +182,15 @@ class ConversationManager:
                 and ("escalat" in msg_lower or "detail" in msg_lower)):
             return _ESCALATION_DETAIL_REPLY
 
+        # 1b) Stop / start — toggle proactive-message consent (works anytime)
+        stripped = msg_lower.strip().strip(".!")
+        if stripped in _STOP_TRIGGERS:
+            self._set_opt_in(inbound.user_id, False)
+            return _STOP_REPLY
+        if stripped in _START_TRIGGERS:
+            self._set_opt_in(inbound.user_id, True)
+            return _START_REPLY
+
         # 2) Onboarding gate
         if self._db and self._fsm:
             from baseline.storage import repository as repo
@@ -192,15 +219,29 @@ class ConversationManager:
                 today_summary=sess.today_summary, question=msg,
             )
 
-        # 7) No prior insight — orientation
-        if sess.last_insight is None:
-            if any(g in msg_lower for g in ["hello", "hi", "hey", "how", "what"]):
-                return _NO_INSIGHT_REPLY
+        # 7) Greeting / no prior insight — orientation
+        if any(g in msg_lower for g in ["hello", "hi ", "hey", "help", "what can you"]) \
+                or msg_lower.strip() in {"hi", "hello", "hey", "help"}:
+            return _FALLBACK_REPLY if sess.last_insight is None else _NO_INSIGHT_REPLY
 
-        # 8) General coaching fallback
-        devs = sess.last_insight.deviations if sess.last_insight else []
-        summary = sess.today_summary or "No data yet."
-        return self._coach.answer_question(profile, devs, today_summary=summary, question=msg)
+        # 8) Genuine free-form question → coach brain (always returns a grounded reply)
+        if msg.strip():
+            devs = sess.last_insight.deviations if sess.last_insight else []
+            summary = sess.today_summary or "No data yet."
+            return self._coach.answer_question(profile, devs, today_summary=summary, question=msg)
+
+        # 9) Empty / unparseable → friendly capability menu (never dead-end)
+        return _FALLBACK_REPLY
+
+    def _set_opt_in(self, user_id: str, value: bool) -> None:
+        if not self._db:
+            return
+        from baseline.storage import repository as repo
+        with self._db.session() as s:
+            p = repo.get_user(s, user_id)
+            if p is not None:
+                p.opted_in = value
+                repo.upsert_user(s, p)
 
     def _handle_onboarding(self, inbound: InboundMessage, profile: UserProfile,
                            sess: _UserSession, ob_state) -> str:
@@ -235,6 +276,8 @@ class ConversationManager:
             height_cm=assembled.get("height_cm"),
         )
         result = onboard_user(self._db, self._source, self._coach, req)
+        # Persist the consent captured in the onboarding opt-in step.
+        self._set_opt_in(user_id, bool(assembled.get("opted_in", False)))
         today_summary = result.first_insight.date.isoformat()
         self.set_last_insight(user_id, result.first_insight, today_summary)
 
